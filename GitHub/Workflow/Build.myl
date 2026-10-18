@@ -1,0 +1,77 @@
+name: APK to IPA - Final Converter
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'input/*.apk'
+
+jobs:
+  convert:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: 1. Code എടുക്കുന്നു
+        uses: actions/checkout@v4
+
+      - name: 2. APK ഉണ്ടോ എന്ന് നോക്കുന്നു
+        run: |
+          ls -lh input/
+          APK_FILE=$(ls input/*.apk | head -n 1)
+          echo "Found: $APK_FILE"
+          echo "APK_FILE=$APK_FILE" >> $GITHUB_ENV
+
+      - name: 3. Tailscale Connect (RDP-ക്ക് വേണ്ടി)
+        if: ${{ secrets.TAILSCALE_AUTHKEY != '' }}
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          args: --advertise-exit-node
+
+      - name: 4. RDP ഓൺ ആക്കുന്നു
+        if: ${{ secrets.TAILSCALE_AUTHKEY != '' }}
+        run: |
+          echo "Enabling RDP..."
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -configure -allowAccessFor -allUsers -privs -all -clientopts -setvnclegacy -vnclegacy yes
+          echo "RDP_PASSWORD" | sudo dscl . -passwd /Users/runner
+          sudo dscl . -create /Users/runner Password ${{ secrets.RDP_CREDS }}
+
+      - name: 5. RDP Details കാണിക്കുന്നു
+        if: ${{ secrets.TAILSCALE_AUTHKEY != '' }}
+        shell: pwsh
+        env:
+          RDP_CREDS: ${{ secrets.RDP_CREDS }}
+        run: |
+          Write-Host "`n=== RDP ACCESS READY ==="
+          $ip = tailscale ip -4
+          Write-Host "Address: $ip"
+          Write-Host "Username: runner"
+          Write-Host "Password: $env:RDP_CREDS"
+          Write-Host "========================`n"
+
+      - name: 6. APK-യെ IPA ആക്കുന്നു (Main Work)
+        run: |
+          APP_NAME=$(basename "${{ env.APK_FILE }}" .apk)
+          echo "Converting $APP_NAME..."
+          
+          # ഇവിടെയാണ് നിന്റെ Converter Logic
+          # ഇപ്പോൾ തൽക്കാലം ഒരു dummy IPA ഉണ്ടാക്കുന്നു
+          mkdir -p output/Payload
+          echo "This IPA contains $APP_NAME" > output/Payload/info.txt
+          cd output
+          zip -r $APP_NAME.ipa Payload/
+          ls -lh *.ipa
+
+      - name: 7. Maintain Connection - 5 മണിക്കൂർ
+        if: ${{ secrets.TAILSCALE_AUTHKEY != '' }}
+        shell: pwsh
+        run: |
+          Write-Host "RDP will be alive for 5 hours..."
+          Start-Sleep -Seconds 18000
+
+      - name: 8. IPA Upload ചെയ്യുന്നു
+        uses: actions/upload-artifact@v4
+        with:
+          name: converted-ipa
+          path: output/*.ipa
